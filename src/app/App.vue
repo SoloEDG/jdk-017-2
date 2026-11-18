@@ -2,11 +2,13 @@
 import { Orbit, ArrowUpRight, Camera, ChevronRight } from "lucide-vue-next";
 import { AssetPanel } from "../features/asset";
 import { ProjectionPanel } from "../features/projection";
+import { PatchPanel, usePatches } from "../features/patch";
 import { ViewportPanel, ViewControls } from "../features/viewport";
 import { EdgePanel } from "../features/edge";
 import { ExportPanel } from "../features/export";
 import { useStudio } from "./useStudio";
 const doc = useStudio();
+const patchCtl = usePatches(doc);
 </script>
 <template>
   <div class="workspace">
@@ -29,14 +31,17 @@ const doc = useStudio();
     </div>
     <div class="studio-grid">
       <aside class="left-sidebar">
-        <AssetPanel :doc="doc" /><ProjectionPanel :doc="doc" />
+        <AssetPanel :doc="doc" /><ProjectionPanel :doc="doc" /><PatchPanel
+          :doc="doc"
+          :patch="patchCtl"
+        />
         <div class="sidebar-note">
           <span>THE WORLD, REIMAGINED.</span>
           <p>把远方，装进一颗星球。</p>
           <span>✳ &nbsp; MADE FOR YOUR PERSPECTIVE</span>
         </div>
       </aside>
-      <ViewportPanel :doc="doc" />
+      <ViewportPanel :doc="doc" :patch="patchCtl" />
       <aside class="right-sidebar">
         <ViewControls :doc="doc" /><EdgePanel :doc="doc" /><ExportPanel
           :doc="doc"

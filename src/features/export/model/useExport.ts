@@ -16,6 +16,12 @@ export function useExport(doc: StudioDocument) {
         asset: doc.asset,
         projection: { ...doc.projection },
         edge: { ...doc.edge },
+        // 快照补丁数据，导出过程中继续编辑不影响本次结果
+        patches: doc.patches.map((p) => ({
+          ...p,
+          strokes: p.strokes.map((s) => ({ ...s, points: [...s.points] })),
+        })),
+        draft: false,
       },
       options = { ...settings };
     try {

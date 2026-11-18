@@ -7,7 +7,7 @@ defineProps<{ doc: StudioDocument }>();
 <template>
   <section class="panel">
     <div class="section-label">
-      <span>04 / 边缘处理</span><Blend :size="16" />
+      <span>05 / 边缘处理</span><Blend :size="16" />
     </div>
     <label class="control"
       >接缝融合 <output>{{ Math.round(doc.edge.seam * 100) }}%</output

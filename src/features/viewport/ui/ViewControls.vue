@@ -10,7 +10,7 @@ const controls = [
 </script>
 <template>
   <section class="panel">
-    <div class="section-label"><span>03 / 旋转取景</span><span>↗</span></div>
+    <div class="section-label"><span>04 / 旋转取景</span><span>↗</span></div>
     <label v-for="c in controls" :key="c.key" class="control"
       >{{ c.label }}<output>{{ Math.round(doc.projection[c.key]) }}°</output
       ><input

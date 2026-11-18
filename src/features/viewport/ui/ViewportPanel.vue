@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onBeforeUnmount, ref, watch } from "vue";
 import {
   Move,
   Maximize,
@@ -7,21 +7,61 @@ import {
   Plus,
   Minus,
   ScanLine,
+  Brush,
+  Crosshair,
 } from "lucide-vue-next";
-import type { StudioDocument, Projection } from "../../../shared/types";
+import type { StudioDocument, Projection, SpherePoint } from "../../../shared/types";
 import { usePreview } from "../model/usePreview";
 import { dragView, wheelZoom } from "../lib/gestures";
-const { doc } = defineProps<{ doc: StudioDocument }>();
+import { projectPoint } from "../../projection";
+import { drawOverlay, uvToSphere, type PatchController } from "../../patch";
+const { doc, patch } = defineProps<{
+  doc: StudioDocument;
+  patch: PatchController;
+}>();
 const canvas = ref<HTMLCanvasElement>();
-const { rendering } = usePreview(doc, canvas);
+const overlay = ref<HTMLCanvasElement>();
+const { rendering } = usePreview(doc, canvas, patch);
 const guides = ref(false);
+const hover = ref<SpherePoint | null>(null);
 let start: { x: number; y: number; p: Projection } | null = null;
+function uvOf(e: PointerEvent) {
+  const el = e.currentTarget as HTMLElement;
+  const rect = el.getBoundingClientRect();
+  const size = canvas.value?.width || 600;
+  const x = ((e.clientX - rect.left) / rect.width) * size;
+  const y = ((e.clientY - rect.top) / rect.height) * size;
+  return projectPoint(x + 0.5, y + 0.5, size, size, doc.projection);
+}
 function down(e: PointerEvent) {
   if (e.button !== 0) return;
-  start = { x: e.clientX, y: e.clientY, p: { ...doc.projection } };
   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  if (patch.ctl.mode === "paint") {
+    const { u, v } = uvOf(e);
+    patch.beginStroke(u, v);
+    hover.value = uvToSphere(u, v);
+  } else if (patch.ctl.mode === "source") {
+    const { u, v } = uvOf(e);
+    patch.beginSource();
+    patch.dragSource(u, v);
+  } else {
+    start = { x: e.clientX, y: e.clientY, p: { ...doc.projection } };
+  }
 }
 function move(e: PointerEvent) {
+  if (patch.ctl.mode === "paint") {
+    const { u, v } = uvOf(e);
+    hover.value = uvToSphere(u, v);
+    if (patch.ctl.interacting) patch.extendStroke(u, v);
+    return;
+  }
+  if (patch.ctl.mode === "source") {
+    if (patch.ctl.interacting) {
+      const { u, v } = uvOf(e);
+      patch.dragSource(u, v);
+    }
+    return;
+  }
   if (!start) return;
   Object.assign(
     doc.projection,
@@ -33,9 +73,52 @@ function move(e: PointerEvent) {
     ),
   );
 }
+function up() {
+  patch.endStroke();
+  patch.endSource();
+  start = null;
+}
 function wheel(e: WheelEvent) {
   doc.projection.zoom = wheelZoom(doc.projection.zoom, e.deltaY);
 }
+// 覆盖层：把球面笔触/锚点按当前投影画回屏幕，旋转或改尺寸后仍贴着景物
+let frame = 0;
+watch(
+  () => [
+    canvas.value,
+    JSON.stringify(doc.projection),
+    JSON.stringify(doc.patches),
+    patch.ctl.mode,
+    patch.ctl.activeId,
+    patch.ctl.brushRadius,
+    hover.value,
+    rendering.value,
+  ],
+  () => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      const o = overlay.value,
+        c = canvas.value;
+      if (!o || !c) return;
+      o.width = c.width;
+      o.height = c.height;
+      drawOverlay(o, { ...doc.projection }, {
+        patches: doc.patches,
+        activeId: patch.ctl.activeId,
+        mode: patch.ctl.mode,
+        brushRadius: patch.ctl.brushRadius,
+        hover: hover.value,
+      });
+    });
+  },
+  { immediate: true, flush: "post" },
+);
+onBeforeUnmount(() => cancelAnimationFrame(frame));
+const modes = [
+  { key: "view", label: "浏览", icon: Move },
+  { key: "paint", label: "涂抹", icon: Brush },
+  { key: "source", label: "取样", icon: Crosshair },
+] as const;
 </script>
 <template>
   <main class="viewport">
@@ -55,24 +138,41 @@ function wheel(e: WheelEvent) {
       >
       <div
         class="canvas-wrap"
-        :class="{ guides }"
+        :class="[{ guides }, `mode-${patch.ctl.mode}`]"
         @pointerdown="down"
         @pointermove="move"
-        @pointerup="start = null"
-        @pointercancel="start = null"
-        @lostpointercapture="start = null"
+        @pointerup="up"
+        @pointercancel="up"
+        @lostpointercapture="up"
+        @pointerleave="hover = null"
         @wheel.prevent="wheel"
       >
         <canvas ref="canvas" aria-label="小行星实时投影画布" />
+        <canvas ref="overlay" class="overlay" aria-hidden="true" />
         <div v-if="!doc.asset" class="empty">导入一张照片，开启你的星球</div>
         <div v-if="guides" class="crosshair" />
       </div>
       <div class="canvas-caption">
-        <span>STEREOGRAPHIC PROJECTION</span><span>600 × 600 · 预览</span>
+        <span>STEREOGRAPHIC PROJECTION</span
+        ><span v-if="patch.ctl.mode === 'paint'" class="mode-hint"
+          >涂抹模式：在星球上涂出要遮盖的区域</span
+        ><span v-else-if="patch.ctl.mode === 'source'" class="mode-hint"
+          >取样模式：点击画面放置取样源</span
+        ><span v-else>600 × 600 · 预览</span>
       </div>
     </div>
     <div class="viewport-toolbar">
-      <div class="gesture-hint">
+      <div class="segmented small mode-switch" v-if="doc.asset">
+        <button
+          v-for="m in modes"
+          :key="m.key"
+          :class="{ active: patch.ctl.mode === m.key }"
+          @click="patch.setMode(m.key)"
+        >
+          <component :is="m.icon" :size="12" /> {{ m.label }}
+        </button>
+      </div>
+      <div class="gesture-hint" v-if="patch.ctl.mode === 'view'">
         <MousePointer2 :size="14" /> 拖动旋转 <span>·</span
         ><Move :size="14" /> 滚轮缩放
       </div>
@@ -109,3 +209,33 @@ function wheel(e: WheelEvent) {
     </div>
   </main>
 </template>
+<style scoped>
+.canvas-wrap {
+  position: relative;
+}
+.canvas-wrap .overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.canvas-wrap.mode-paint,
+.canvas-wrap.mode-source {
+  cursor: crosshair;
+}
+.mode-switch {
+  margin-bottom: 0;
+  flex: none;
+}
+.mode-switch button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: center;
+  padding: 7px 10px;
+}
+.mode-hint {
+  color: #8a6a3f;
+}
+</style>
